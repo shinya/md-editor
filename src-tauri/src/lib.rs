@@ -3,6 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tauri::{Manager, Window};
 
 // 変数の定義
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +16,35 @@ pub struct Variable {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VariableSet {
     pub variables: Vec<Variable>,
+}
+
+// ウィンドウ情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub maximized: bool,
+    pub minimized: bool,
+}
+
+// ディスプレイ情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub scale_factor: f64,
+    pub is_primary: bool,
+}
+
+// システム情報
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemInfo {
+    pub displays: Vec<DisplayInfo>,
+    pub primary_display_index: usize,
 }
 
 // 変数処理器
@@ -252,6 +282,143 @@ async fn save_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|_| "Failed to save file".to_string())
 }
 
+// Tauriコマンド: ウィンドウ情報を取得
+#[tauri::command]
+async fn get_window_info(window: Window) -> Result<WindowInfo, String> {
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let is_maximized = window.is_maximized().map_err(|e| e.to_string())?;
+    let is_minimized = window.is_minimized().map_err(|e| e.to_string())?;
+
+    Ok(WindowInfo {
+        width: size.width as f64,
+        height: size.height as f64,
+        x: position.x as f64,
+        y: position.y as f64,
+        maximized: is_maximized,
+        minimized: is_minimized,
+    })
+}
+
+// Tauriコマンド: ウィンドウ情報を設定
+#[tauri::command]
+async fn set_window_info(window: Window, info: WindowInfo) -> Result<(), String> {
+    // 最小化状態を解除
+    if info.minimized {
+        window.unminimize().map_err(|e| e.to_string())?;
+    }
+
+    // 最大化状態を設定
+    if info.maximized {
+        window.maximize().map_err(|e| e.to_string())?;
+    } else {
+        // 通常サイズに設定
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                info.width,
+                info.height,
+            )))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                info.x, info.y,
+            )))
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+// Tauriコマンド: システム情報を取得
+#[tauri::command]
+async fn get_system_info(window: Window) -> Result<SystemInfo, String> {
+    let app_handle = window.app_handle();
+
+    // 全モニターを取得
+    let monitors = match app_handle.available_monitors() {
+        Ok(monitors) => monitors,
+        Err(e) => return Err(format!("Failed to get monitors: {}", e)),
+    };
+
+    if monitors.is_empty() {
+        return Err("No monitors found".to_string());
+    }
+
+    // プライマリモニターを取得
+    let primary_monitor = match app_handle.primary_monitor() {
+        Ok(Some(monitor)) => monitor,
+        Ok(None) => return Err("No primary monitor found".to_string()),
+        Err(e) => return Err(format!("Failed to get primary monitor: {}", e)),
+    };
+
+    let mut displays = Vec::new();
+    let mut primary_display_index = 0;
+
+    // プライマリモニターの情報を取得
+    let primary_size = primary_monitor.size();
+    let primary_position = primary_monitor.position();
+    let primary_scale_factor = primary_monitor.scale_factor();
+
+    // 全モニターの情報を収集
+    for (index, monitor) in monitors.iter().enumerate() {
+        let size = monitor.size();
+        let position = monitor.position();
+        let scale_factor = monitor.scale_factor();
+
+        // 値の妥当性をチェック
+        if size.width == 0 || size.height == 0 {
+            println!(
+                "Warning: Skipping monitor with invalid size: {}x{}",
+                size.width, size.height
+            );
+            continue;
+        }
+
+        // プライマリモニターの判定（位置とサイズで比較）
+        let is_primary = size.width == primary_size.width
+            && size.height == primary_size.height
+            && position.x == primary_position.x
+            && position.y == primary_position.y;
+
+        if is_primary {
+            primary_display_index = index;
+        }
+
+        let display_info = DisplayInfo {
+            width: size.width as f64,
+            height: size.height as f64,
+            x: position.x as f64,
+            y: position.y as f64,
+            scale_factor,
+            is_primary,
+        };
+
+        displays.push(display_info);
+
+        println!(
+            "Debug: Monitor {} - size: {}x{}, pos: ({}, {}), scale: {}, primary: {}",
+            index, size.width, size.height, position.x, position.y, scale_factor, is_primary
+        );
+    }
+
+    if displays.is_empty() {
+        return Err("No valid monitors found".to_string());
+    }
+
+    let system_info = SystemInfo {
+        displays,
+        primary_display_index,
+    };
+
+    println!(
+        "Debug: System info created - displays: {}, primary_index: {}",
+        system_info.displays.len(),
+        system_info.primary_display_index
+    );
+
+    Ok(system_info)
+}
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -273,7 +440,10 @@ pub fn run() {
             process_markdown,
             get_expanded_markdown,
             read_file,
-            save_file
+            save_file,
+            get_window_info,
+            set_window_info,
+            get_system_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

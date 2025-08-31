@@ -12,6 +12,7 @@ import { useTabsDesktop } from './hooks/useTabsDesktop';
 import { storeApi } from './api/storeApi';
 import { variableApi } from './api/variableApi';
 import { desktopApi } from './api/desktopApi';
+import { windowApi } from './api/windowApi';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 
@@ -33,6 +34,7 @@ function AppDesktop() {
   const [tabLayout, setTabLayout] = useState<'horizontal' | 'vertical'>('horizontal');
   const [viewMode, setViewMode] = useState<'split' | 'editor' | 'preview'>('split');
   const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
+  const [isWindowInfoLoaded, setIsWindowInfoLoaded] = useState(false);
 
   const {
     tabs,
@@ -128,6 +130,74 @@ function AppDesktop() {
     loadSettings();
   }, []);
 
+  // ウィンドウ情報の初期化（一度だけ実行）
+  useEffect(() => {
+    const loadWindowInfo = async () => {
+      try {
+        console.log('Loading window info...');
+
+        // 保存されたウィンドウ情報とシステム情報を読み込み
+        const savedWindowInfo = await storeApi.loadWindowInfo();
+        const savedSystemInfo = await storeApi.loadSystemInfo();
+
+        console.log('Debug: Loaded saved window info:', savedWindowInfo);
+        console.log('Debug: Loaded saved system info:', savedSystemInfo);
+        console.log('Debug: Saved system info details:', {
+          displaysCount: savedSystemInfo?.displays?.length,
+          primaryIndex: savedSystemInfo?.primaryDisplayIndex,
+          displays: savedSystemInfo?.displays?.map((d, i) => ({
+            index: i,
+            width: d.width,
+            height: d.height,
+            x: d.x,
+            y: d.y,
+            isPrimary: d.isPrimary
+          }))
+        });
+
+                if (savedWindowInfo && savedSystemInfo) {
+          try {
+            // 現在のシステム情報を取得
+            const currentSystemInfo = await windowApi.getSystemInfo();
+
+            // システム情報が有効かチェック
+            if (!currentSystemInfo || !currentSystemInfo.displays || currentSystemInfo.displays.length === 0) {
+              console.log('Invalid current system info, using defaults');
+              return;
+            }
+
+            // ディスプレイ設定が同じかチェック
+            const isDisplaySame = await windowApi.isDisplayConfigurationSame(savedSystemInfo);
+
+            // ウィンドウ情報が有効かチェック
+            const isWindowValid = windowApi.isWindowInfoValid(savedWindowInfo, currentSystemInfo);
+
+            if (isDisplaySame && isWindowValid) {
+              // 保存されたウィンドウ情報を復元
+              console.log('Restoring saved window info:', savedWindowInfo);
+              await windowApi.setWindowInfo(savedWindowInfo);
+            } else {
+              console.log('Display configuration changed or window info invalid, using defaults');
+            }
+          } catch (error) {
+            console.error('Error during window info restoration:', error);
+            console.log('Using defaults due to error');
+          }
+        } else {
+          console.log('No saved window info found, using defaults');
+        }
+
+        setIsWindowInfoLoaded(true);
+        console.log('Window info loaded successfully');
+      } catch (error) {
+        console.error('Failed to load window info:', error);
+        setIsWindowInfoLoaded(true);
+      }
+    };
+
+    loadWindowInfo();
+  }, []);
+
   // 言語設定の保存
   useEffect(() => {
     if (!isSettingsLoaded) return; // 初期読み込み中は保存しない
@@ -209,6 +279,40 @@ function AppDesktop() {
 
     saveViewMode();
   }, [viewMode, isSettingsLoaded]);
+
+    // ウィンドウ情報の保存（定期的に実行）
+  useEffect(() => {
+    if (!isWindowInfoLoaded) return; // 初期読み込み中は保存しない
+
+    const saveWindowInfo = async () => {
+      try {
+        const windowInfo = await windowApi.getWindowInfo();
+        const systemInfo = await windowApi.getSystemInfo();
+
+        // システム情報が有効かチェック
+        if (systemInfo && systemInfo.displays && systemInfo.displays.length > 0) {
+          await storeApi.saveWindowInfo(windowInfo);
+          await storeApi.saveSystemInfo(systemInfo);
+          console.log('Window info saved successfully');
+        } else {
+          console.warn('Invalid system info, skipping window info save');
+        }
+      } catch (error) {
+        console.error('Failed to save window info:', error);
+      }
+    };
+
+    // 初回保存を少し遅らせる（アプリケーション起動後の安定化を待つ）
+    const initialSave = setTimeout(saveWindowInfo, 2000);
+
+    // その後5秒ごとにウィンドウ情報を保存
+    const interval = setInterval(saveWindowInfo, 5000);
+
+    return () => {
+      clearTimeout(initialSave);
+      clearInterval(interval);
+    };
+  }, [isWindowInfoLoaded]);
 
   const handleOpenFile = async () => {
     try {
@@ -347,6 +451,30 @@ function AppDesktop() {
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [activeTab]); // activeTabが変更されたときにハンドラーを更新
+
+    // アプリケーション終了時のウィンドウ情報保存
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      try {
+        const windowInfo = await windowApi.getWindowInfo();
+        const systemInfo = await windowApi.getSystemInfo();
+
+        // システム情報が有効かチェック
+        if (systemInfo && systemInfo.displays && systemInfo.displays.length > 0) {
+          await storeApi.saveWindowInfo(windowInfo);
+          await storeApi.saveSystemInfo(systemInfo);
+          console.log('Window info saved on exit');
+        } else {
+          console.warn('Invalid system info, skipping window info save on exit');
+        }
+      } catch (error) {
+        console.error('Failed to save window info on exit:', error);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
 
   // 初期タブを作成
   useEffect(() => {

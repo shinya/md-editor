@@ -1,5 +1,6 @@
 import { load, Store } from '@tauri-apps/plugin-store';
 import { AppState } from '../types/tab';
+import { WindowInfo, SystemInfo } from './windowApi';
 
 let store: Store | null = null;
 
@@ -180,6 +181,62 @@ export const storeApi = {
     } catch (error) {
       console.error('Failed to load view mode:', error);
       return 'split';
+    }
+  },
+
+  // ウィンドウ情報を保存
+  async saveWindowInfo(windowInfo: WindowInfo): Promise<void> {
+    try {
+      console.log('Saving window info:', windowInfo);
+      const storeInstance = await getStore();
+      await storeInstance.set('windowInfo', windowInfo);
+      await storeInstance.save();
+      console.log('Window info saved successfully');
+    } catch (error) {
+      console.error('Failed to save window info:', error);
+      throw error;
+    }
+  },
+
+  // ウィンドウ情報を読み込み
+  async loadWindowInfo(): Promise<WindowInfo | null> {
+    try {
+      console.log('Loading window info...');
+      const storeInstance = await getStore();
+      const windowInfo = await storeInstance.get('windowInfo') as WindowInfo | null;
+      console.log('Loaded window info:', windowInfo);
+      return windowInfo;
+    } catch (error) {
+      console.error('Failed to load window info:', error);
+      return null;
+    }
+  },
+
+  // システム情報を保存
+  async saveSystemInfo(systemInfo: SystemInfo): Promise<void> {
+    try {
+      console.log('Saving system info:', systemInfo);
+      const storeInstance = await getStore();
+      await storeInstance.set('systemInfo', systemInfo);
+      await storeInstance.save();
+      console.log('System info saved successfully');
+    } catch (error) {
+      console.error('Failed to save system info:', error);
+      throw error;
+    }
+  },
+
+  // システム情報を読み込み
+  async loadSystemInfo(): Promise<SystemInfo | null> {
+    try {
+      console.log('Loading system info...');
+      const storeInstance = await getStore();
+      const systemInfo = await storeInstance.get('systemInfo') as SystemInfo | null;
+      console.log('Loaded system info:', systemInfo);
+      return systemInfo;
+    } catch (error) {
+      console.error('Failed to load system info:', error);
+      return null;
     }
   },
 
